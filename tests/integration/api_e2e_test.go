@@ -154,6 +154,90 @@ func TestIncidentLifecycleE2E(t *testing.T) {
 	if len(events) < 3 {
 		t.Fatalf("timeline events = %d, want >= 3", len(events))
 	}
+
+	// Phase 3: worker runs tools; evidence should be populated
+	var evidenceCount int
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		evidenceResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s/evidence", baseURL(), incidentID))
+		if err != nil {
+			t.Fatalf("get evidence: %v", err)
+		}
+		var evidence []map[string]any
+		_ = json.Unmarshal(evidenceResp.Data, &evidence)
+		evidenceCount = len(evidence)
+		if evidenceCount >= 5 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if evidenceCount < 5 {
+		t.Fatalf("evidence count = %d, want >= 5 (worker tool executions)", evidenceCount)
+	}
+}
+
+func TestToolsAPI(t *testing.T) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	toolsResp, err := getJSON(client, baseURL()+"/tools")
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	var tools []map[string]any
+	if err := json.Unmarshal(toolsResp.Data, &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 13 {
+		t.Fatalf("tool count = %d, want 13", len(tools))
+	}
+
+	// Create incident for tool execution
+	payload, _ := json.Marshal(map[string]string{
+		"title": "Tool test", "severity": "high",
+		"service": "payment-service", "environment": "production",
+	})
+	resp, err := client.Post(baseURL()+"/incidents", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	var created apiResponse
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	var data struct {
+		Incident struct{ ID string `json:"id"` } `json:"incident"`
+	}
+	_ = json.Unmarshal(created.Data, &data)
+	incidentID := data.Incident.ID
+
+	// Execute read-only tool
+	execResp, err := client.Post(
+		fmt.Sprintf("%s/incidents/%s/tools/search_logs/execute", baseURL(), incidentID),
+		"application/json", bytes.NewReader([]byte(`{}`)),
+	)
+	if err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+	defer execResp.Body.Close()
+	if execResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(execResp.Body)
+		t.Fatalf("execute status %d: %s", execResp.StatusCode, body)
+	}
+
+	// Approval-required tool without approval returns 202
+	prPayload, _ := json.Marshal(map[string]any{
+		"input": map[string]string{"title": "test", "body": "body"},
+	})
+	prResp, err := client.Post(
+		fmt.Sprintf("%s/incidents/%s/tools/create_github_issue/execute", baseURL(), incidentID),
+		"application/json", bytes.NewReader(prPayload),
+	)
+	if err != nil {
+		t.Fatalf("execute approval tool: %v", err)
+	}
+	defer prResp.Body.Close()
+	if prResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("approval tool status %d, want 202", prResp.StatusCode)
+	}
 }
 
 func TestCreateIncidentValidation(t *testing.T) {

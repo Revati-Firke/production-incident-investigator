@@ -10,6 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/Revati-Firke/production-incident-investigator/internal/agent/wiring"
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	appinvestigation "github.com/Revati-Firke/production-incident-investigator/internal/application/investigation"
 	"github.com/Revati-Firke/production-incident-investigator/internal/config"
@@ -55,8 +56,14 @@ func main() {
 	investigationRepo := postgres.NewInvestigationRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
+	_, toolSvc, err := wiring.NewToolService(dbPool, incidentRepo)
+	if err != nil {
+		log.Error("failed to bootstrap tools", "error", err)
+		os.Exit(1)
+	}
+
 	incidentSvc := appincident.NewService(incidentRepo)
-	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue)
+	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue, toolSvc)
 
 	log.Info("worker ready, waiting for investigation jobs")
 

@@ -10,9 +10,19 @@ import (
 	"github.com/google/uuid"
 
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
+	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 	domain "github.com/Revati-Firke/production-incident-investigator/internal/domain/incident"
 	invdomain "github.com/Revati-Firke/production-incident-investigator/internal/domain/investigation"
 )
+
+// defaultInvestigationTools are read-only tools run during automated triage.
+var defaultInvestigationTools = []string{
+	"search_logs",
+	"query_metrics",
+	"get_service_health",
+	"get_recent_deployments",
+	"search_runbooks",
+}
 
 const (
 	defaultMaxAttempts = 3
@@ -87,13 +97,14 @@ type Processor struct {
 	repo      invdomain.Repository
 	incidents *appincident.Service
 	notifier  invdomain.JobNotifier
+	tools     *apptool.Service
 
 	wg sync.WaitGroup
 }
 
 // NewProcessor creates a new investigation processor.
-func NewProcessor(repo invdomain.Repository, incidents *appincident.Service, notifier invdomain.JobNotifier) *Processor {
-	return &Processor{repo: repo, incidents: incidents, notifier: notifier}
+func NewProcessor(repo invdomain.Repository, incidents *appincident.Service, notifier invdomain.JobNotifier, tools *apptool.Service) *Processor {
+	return &Processor{repo: repo, incidents: incidents, notifier: notifier, tools: tools}
 }
 
 // ProcessNext claims and processes a single job. Returns nil when no jobs are available.
@@ -217,7 +228,16 @@ func (p *Processor) runInvestigation(ctx context.Context, job *invdomain.Job) er
 		return fmt.Errorf("transition to investigating: %w", err)
 	}
 
-	// Phase 2 stub: mark investigation complete. AI agent runs in Phase 4.
+	if p.tools != nil {
+		executions, err := p.tools.ExecuteBatch(ctx, job.IncidentID, inv.ID, defaultInvestigationTools, "investigation-worker")
+		if err != nil {
+			slog.Warn("investigation tool batch partial failure", "error", err, "completed", len(executions))
+		} else {
+			slog.Info("investigation tools executed", "count", len(executions), "incident_id", job.IncidentID)
+		}
+	}
+
+	// Phase 3: tools collect evidence; AI agent analysis runs in Phase 4.
 	completedAt := time.Now().UTC()
 	inv.Status = invdomain.StatusCompleted
 	inv.CompletedAt = &completedAt

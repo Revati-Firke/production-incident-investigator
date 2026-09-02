@@ -4,7 +4,7 @@
 
 OpsPilot receives production alerts, investigates incidents using AI agents and observability tools, determines probable root causes, and coordinates human-approved remediation — with a full audit trail.
 
-> **Status:** Phase 2 (Incident Engine) complete. Async investigation worker, job queue, and atomic intake are operational.
+> **Status:** Phase 3 (Tool Framework) complete. Generic tool system with permissions, mock adapters, audit trail, and worker integration.
 
 ## Project Overview
 
@@ -49,7 +49,7 @@ flowchart LR
 | Metrics | `/api/v1/metrics` (Prometheus) |
 | Docker Compose | postgres, redis, migrate, opspilot-api |
 
-## Phase 2 — Incident Engine (Current)
+## Phase 2 — Incident Engine
 
 ### Implemented
 
@@ -64,6 +64,40 @@ flowchart LR
 | Optimistic locking | Status transitions use `WHERE status = expected` |
 | Worker graceful shutdown | Waits for in-flight jobs before exit |
 
+## Phase 3 — Tool Framework (Current)
+
+### Implemented
+
+| Component | Description |
+|-----------|-------------|
+| Tool interface | Generic `Tool` with `Execute`, `InputSchema`, permissions |
+| Tool registry | Thread-safe registration and lookup |
+| Tool executor | Timeouts, permission checks, audit persistence |
+| Permission model | `READ_ONLY`, `REQUIRES_APPROVAL`, `AUTONOMOUS` |
+| Mock tools | 13 tools across observability, DB, deployment, GitHub, knowledge, Slack |
+| Worker integration | Investigation worker runs 5 read-only tools per incident |
+| Tool API | `GET /api/v1/tools`, `POST /api/v1/incidents/{id}/tools/{name}/execute` |
+| Evidence API | `GET /api/v1/incidents/{id}/evidence` (tool execution audit trail) |
+| Persistence | `tool_executions` table with input/output/duration |
+
+### Mock Tools
+
+| Tool | Permission | Category |
+|------|------------|----------|
+| `search_logs` | READ_ONLY | Observability |
+| `query_metrics` | READ_ONLY | Observability |
+| `get_service_health` | READ_ONLY | Observability |
+| `query_database` | READ_ONLY | Database |
+| `get_database_connections` | READ_ONLY | Database |
+| `get_recent_deployments` | READ_ONLY | Deployment |
+| `search_github_commits` | READ_ONLY | GitHub |
+| `inspect_code` | READ_ONLY | GitHub |
+| `create_github_issue` | REQUIRES_APPROVAL | GitHub |
+| `create_pull_request` | REQUIRES_APPROVAL | GitHub |
+| `search_runbooks` | READ_ONLY | Knowledge |
+| `search_previous_incidents` | READ_ONLY | Knowledge |
+| `send_slack_notification` | AUTONOMOUS | Communication |
+
 ### Directory Structure
 
 ```
@@ -75,10 +109,16 @@ production-incident-investigator/
 │   ├── config/              # Environment configuration
 │   ├── domain/
 │   │   ├── incident/        # Incident models, state machine
-│   │   └── investigation/   # Investigation and job models
+│   │   ├── investigation/   # Investigation and job models
+│   │   └── tool/            # Tool execution domain
 │   ├── application/
 │   │   ├── incident/        # Incident business logic
-│   │   └── investigation/   # Orchestrator, processor, intake
+│   │   ├── investigation/   # Orchestrator, processor, intake
+│   │   └── tool/            # Tool listing and execution
+│   ├── agent/
+│   │   ├── tools/           # Tool interface, registry, executor
+│   │   │   └── mocks/       # Mock tool implementations
+│   │   └── wiring/          # Dependency wiring
 │   ├── infrastructure/
 │   │   ├── postgres/        # PostgreSQL repositories
 │   │   └── redis/           # Redis client and job queue
@@ -178,6 +218,32 @@ curl http://localhost:8080/api/v1/incidents/{id}
 curl http://localhost:8080/api/v1/incidents/{id}/timeline
 ```
 
+### List Tools
+
+```bash
+curl http://localhost:8080/api/v1/tools
+```
+
+### Execute Tool (incident context)
+
+```bash
+# Read-only tool (runs immediately)
+curl -X POST http://localhost:8080/api/v1/incidents/{id}/tools/search_logs/execute \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Approval-required tool (blocked without approved=true)
+curl -X POST http://localhost:8080/api/v1/incidents/{id}/tools/create_github_issue/execute \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"title":"Follow-up","body":"details"},"approved":true}'
+```
+
+### Get Evidence (tool executions)
+
+```bash
+curl http://localhost:8080/api/v1/incidents/{id}/evidence
+```
+
 ### Health
 
 ```bash
@@ -246,6 +312,9 @@ See [`.env.example`](.env.example) for all variables.
 gofmt -w .
 go test ./...
 go vet ./...
+
+# Integration tests (requires docker compose up)
+go test -tags=integration ./tests/integration/... -v
 ```
 
 ## Roadmap
@@ -254,7 +323,7 @@ go vet ./...
 |-------|--------|-------|
 | 1 — Foundation | ✅ Complete | HTTP, PostgreSQL, Redis, incident API |
 | 2 — Incident Engine | ✅ Complete | Worker, job queue, investigation model |
-| 3 — Tool Framework | Planned | Tool registry, permissions, mocks |
+| 3 — Tool Framework | ✅ Complete | Tool registry, permissions, mocks, evidence API |
 | 4 — AI Agent | Planned | LLM abstraction, orchestration, memory |
 | 5 — RAG | Planned | Document ingestion, pgvector |
 | 6 — Integrations | Planned | GitHub, Slack, Grafana, Prometheus, Loki |

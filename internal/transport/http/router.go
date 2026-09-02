@@ -12,6 +12,7 @@ import (
 
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	appinvestigation "github.com/Revati-Firke/production-incident-investigator/internal/application/investigation"
+	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 )
 
 // HealthDeps provides health check dependencies.
@@ -42,6 +43,7 @@ type RouterDeps struct {
 	Log          *slog.Logger
 	Incidents    *appincident.Service
 	Orchestrator *appinvestigation.Orchestrator
+	Tools        *apptool.Service
 	Health       HealthDeps
 }
 
@@ -57,16 +59,21 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	healthHandler := NewHealthHandler(healthChecker{deps: deps.Health})
 	incidentHandler := NewIncidentHandler(deps.Orchestrator, deps.Incidents)
+	toolHandler := NewToolHandler(deps.Tools)
 
 	r.Get("/api/v1/health", healthHandler.Readiness)
 	r.Get("/api/v1/health/live", healthHandler.Liveness)
 	r.Get("/api/v1/metrics", promhttp.Handler().ServeHTTP)
+
+	r.Get("/api/v1/tools", toolHandler.List)
 
 	r.Route("/api/v1/incidents", func(r chi.Router) {
 		r.Post("/", incidentHandler.Create)
 		r.Get("/", incidentHandler.List)
 		r.Get("/{id}/timeline", incidentHandler.Timeline)
 		r.Get("/{id}/investigation", incidentHandler.Investigation)
+		r.Get("/{id}/evidence", toolHandler.Evidence)
+		r.Post("/{id}/tools/{name}/execute", toolHandler.Execute)
 		r.Get("/{id}", incidentHandler.Get)
 	})
 
