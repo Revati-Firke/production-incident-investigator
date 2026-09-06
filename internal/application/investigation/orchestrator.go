@@ -60,3 +60,11 @@ func (o *Orchestrator) GetInvestigation(ctx context.Context, incidentID uuid.UUI
 	}
 	return o.investigations.GetByIncidentID(ctx, incidentID)
 }
+
+// ListAgentRuns returns AI agent runs for an incident.
+func (o *Orchestrator) ListAgentRuns(ctx context.Context, incidentID uuid.UUID) ([]invdomain.AgentRun, error) {
+	if _, err := o.incidents.GetByID(ctx, incidentID); err != nil {
+		return nil, err
+	}
+	return o.investigations.ListAgentRuns(ctx, incidentID)
+}

@@ -58,7 +58,7 @@ func main() {
 	intakeRepo := postgres.NewIntakeRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
-	_, toolSvc, err := wiring.NewToolService(dbPool, incidentRepo)
+	toolBundle, err := wiring.NewToolBundle(dbPool, incidentRepo)
 	if err != nil {
 		log.Error("failed to bootstrap tools", "error", err)
 		os.Exit(1)
@@ -72,7 +72,7 @@ func main() {
 		Log:          log,
 		Incidents:    incidentSvc,
 		Orchestrator: orchestrator,
-		Tools:        toolSvc,
+		Tools:        toolBundle.Service,
 		Health: transporthttp.HealthDeps{
 			Postgres: dbPool,
 			Redis:    redisClient,

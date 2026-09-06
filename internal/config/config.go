@@ -19,6 +19,12 @@ type Config struct {
 	HTTPIdleTimeout  time.Duration
 
 	LogLevel string
+
+	LLMProvider string
+	LLMAPIKey   string
+	LLMModel    string
+	LLMBaseURL  string
+	LLMTimeout  time.Duration
 }
 
 // Load reads configuration from environment variables.
@@ -32,6 +38,11 @@ func Load() (*Config, error) {
 		HTTPWriteTimeout: getDurationEnv("HTTP_WRITE_TIMEOUT", 15*time.Second),
 		HTTPIdleTimeout:  getDurationEnv("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		LLMProvider:      getEnv("LLM_PROVIDER", "mock"),
+		LLMAPIKey:        os.Getenv("LLM_API_KEY"),
+		LLMModel:         getEnv("LLM_MODEL", "mock-rca-v1"),
+		LLMBaseURL:       getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMTimeout:       getDurationEnv("LLM_TIMEOUT", 60*time.Second),
 	}
 
 	if cfg.DatabaseURL == "" {

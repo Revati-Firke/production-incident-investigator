@@ -58,7 +58,8 @@ func (r *InvestigationRepository) CreateWithJob(ctx context.Context, inv *invdom
 // GetByIncidentID returns the investigation for an incident.
 func (r *InvestigationRepository) GetByIncidentID(ctx context.Context, incidentID uuid.UUID) (*invdomain.Investigation, error) {
 	query := `
-		SELECT id, incident_id, status, started_at, completed_at, error, created_at, updated_at
+		SELECT id, incident_id, status, started_at, completed_at, error,
+		       root_cause, confidence, reasoning_summary, created_at, updated_at
 		FROM investigations WHERE incident_id = $1`
 
 	row := r.pool.QueryRow(ctx, query, incidentID)
@@ -72,15 +73,17 @@ func (r *InvestigationRepository) GetByIncidentID(ctx context.Context, incidentI
 	return inv, nil
 }
 
-// UpdateInvestigation updates an investigation record.
+// UpdateInvestigation updates an investigation record including RCA fields.
 func (r *InvestigationRepository) UpdateInvestigation(ctx context.Context, inv *invdomain.Investigation) error {
 	query := `
 		UPDATE investigations
-		SET status = $1, started_at = $2, completed_at = $3, error = $4, updated_at = $5
-		WHERE id = $6`
+		SET status = $1, started_at = $2, completed_at = $3, error = $4,
+		    root_cause = $5, confidence = $6, reasoning_summary = $7, updated_at = $8
+		WHERE id = $9`
 
 	tag, err := r.pool.Exec(ctx, query,
 		string(inv.Status), inv.StartedAt, inv.CompletedAt, nullIfEmpty(inv.Error),
+		nullJSON(inv.RootCause), inv.Confidence, nullIfEmpty(inv.ReasoningSummary),
 		inv.UpdatedAt, inv.ID,
 	)
 	if err != nil {
@@ -170,13 +173,62 @@ func (r *InvestigationRepository) FailJob(ctx context.Context, jobID uuid.UUID, 
 	return nil
 }
 
+// CreateAgentRun inserts an agent run record.
+func (r *InvestigationRepository) CreateAgentRun(ctx context.Context, run *invdomain.AgentRun) error {
+	query := `
+		INSERT INTO agent_runs (
+			id, investigation_id, incident_id, status, provider, model,
+			input_tokens, output_tokens, duration_ms, error, result, created_at, completed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`
+
+	_, err := r.pool.Exec(ctx, query,
+		run.ID, run.InvestigationID, run.IncidentID, string(run.Status),
+		run.Provider, run.Model, run.InputTokens, run.OutputTokens,
+		run.DurationMS, nullIfEmpty(run.Error), nullJSON(run.Result),
+		run.CreatedAt, run.CompletedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert agent run: %w", err)
+	}
+	return nil
+}
+
+// ListAgentRuns returns agent runs for an incident.
+func (r *InvestigationRepository) ListAgentRuns(ctx context.Context, incidentID uuid.UUID) ([]invdomain.AgentRun, error) {
+	query := `
+		SELECT id, investigation_id, incident_id, status, provider, model,
+		       input_tokens, output_tokens, duration_ms, error, result, created_at, completed_at
+		FROM agent_runs
+		WHERE incident_id = $1
+		ORDER BY created_at ASC`
+
+	rows, err := r.pool.Query(ctx, query, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("list agent runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := make([]invdomain.AgentRun, 0)
+	for rows.Next() {
+		run, err := scanAgentRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, *run)
+	}
+	return runs, rows.Err()
+}
+
 func scanInvestigation(row pgx.Row) (*invdomain.Investigation, error) {
 	var inv invdomain.Investigation
 	var status string
 	var errStr *string
+	var rootCause []byte
+	var reasoning *string
 	if err := row.Scan(
 		&inv.ID, &inv.IncidentID, &status,
 		&inv.StartedAt, &inv.CompletedAt, &errStr,
+		&rootCause, &inv.Confidence, &reasoning,
 		&inv.CreatedAt, &inv.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -184,6 +236,12 @@ func scanInvestigation(row pgx.Row) (*invdomain.Investigation, error) {
 	inv.Status = invdomain.InvestigationStatus(status)
 	if errStr != nil {
 		inv.Error = *errStr
+	}
+	if len(rootCause) > 0 {
+		inv.RootCause = rootCause
+	}
+	if reasoning != nil {
+		inv.ReasoningSummary = *reasoning
 	}
 	return &inv, nil
 }
@@ -205,6 +263,32 @@ func scanJob(row pgx.Row) (*invdomain.Job, error) {
 		job.Error = *errStr
 	}
 	return &job, nil
+}
+
+type agentRunScannable interface {
+	Scan(dest ...any) error
+}
+
+func scanAgentRun(row agentRunScannable) (*invdomain.AgentRun, error) {
+	var run invdomain.AgentRun
+	var status string
+	var errStr *string
+	var result []byte
+	if err := row.Scan(
+		&run.ID, &run.InvestigationID, &run.IncidentID, &status,
+		&run.Provider, &run.Model, &run.InputTokens, &run.OutputTokens,
+		&run.DurationMS, &errStr, &result, &run.CreatedAt, &run.CompletedAt,
+	); err != nil {
+		return nil, err
+	}
+	run.Status = invdomain.AgentRunStatus(status)
+	if errStr != nil {
+		run.Error = *errStr
+	}
+	if len(result) > 0 {
+		run.Result = result
+	}
+	return &run, nil
 }
 
 func nullIfEmpty(s string) *string {

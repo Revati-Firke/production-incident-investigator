@@ -29,7 +29,7 @@ func main() {
 	}
 
 	log := logger.New(cfg.LogLevel)
-	log.Info("starting opspilot worker", "env", cfg.AppEnv)
+	log.Info("starting opspilot worker", "env", cfg.AppEnv, "llm_provider", cfg.LLMProvider)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -56,14 +56,20 @@ func main() {
 	investigationRepo := postgres.NewInvestigationRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
-	_, toolSvc, err := wiring.NewToolService(dbPool, incidentRepo)
+	toolBundle, err := wiring.NewToolBundle(dbPool, incidentRepo)
 	if err != nil {
 		log.Error("failed to bootstrap tools", "error", err)
 		os.Exit(1)
 	}
 
+	agent, err := wiring.NewInvestigationAgent(*cfg, toolBundle)
+	if err != nil {
+		log.Error("failed to bootstrap investigation agent", "error", err)
+		os.Exit(1)
+	}
+
 	incidentSvc := appincident.NewService(incidentRepo)
-	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue, toolSvc)
+	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue, toolBundle.Service, agent)
 
 	log.Info("worker ready, waiting for investigation jobs")
 

@@ -127,6 +127,14 @@ func (m *mockInvestigationRepo) FailJob(_ context.Context, jobID uuid.UUID, jobE
 	return nil
 }
 
+func (m *mockInvestigationRepo) CreateAgentRun(_ context.Context, run *invdomain.AgentRun) error {
+	return nil
+}
+
+func (m *mockInvestigationRepo) ListAgentRuns(_ context.Context, _ uuid.UUID) ([]invdomain.AgentRun, error) {
+	return nil, nil
+}
+
 type mockIntakeStore struct {
 	incRepo *mockIncidentRepo
 	invRepo *mockInvestigationRepo
@@ -170,7 +178,7 @@ func TestProcessor_ProcessNext(t *testing.T) {
 
 	incSvc := appincident.NewService(incRepo)
 	invSvc := appinvestigation.NewService(invRepo, notifier)
-	processor := appinvestigation.NewProcessor(invRepo, incSvc, notifier, nil)
+	processor := appinvestigation.NewProcessor(invRepo, incSvc, notifier, nil, nil)
 
 	inc, err := incSvc.Create(context.Background(), domain.CreateInput{
 		Title:       "Worker test",

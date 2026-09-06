@@ -72,6 +72,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Get("/", incidentHandler.List)
 		r.Get("/{id}/timeline", incidentHandler.Timeline)
 		r.Get("/{id}/investigation", incidentHandler.Investigation)
+		r.Get("/{id}/agent-runs", incidentHandler.AgentRuns)
 		r.Get("/{id}/evidence", toolHandler.Evidence)
 		r.Post("/{id}/tools/{name}/execute", toolHandler.Execute)
 		r.Get("/{id}", incidentHandler.Get)

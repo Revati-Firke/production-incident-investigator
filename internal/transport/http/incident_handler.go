@@ -154,6 +154,23 @@ func (h *IncidentHandler) Investigation(w http.ResponseWriter, r *http.Request) 
 	writeSuccess(w, http.StatusOK, inv)
 }
 
+// AgentRuns handles GET /api/v1/incidents/{id}/agent-runs.
+func (h *IncidentHandler) AgentRuns(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_ID", "Invalid incident ID")
+		return
+	}
+
+	runs, err := h.orchestrator.ListAgentRuns(r.Context(), id)
+	if err != nil {
+		mapInvestigationError(w, err)
+		return
+	}
+
+	writeSuccess(w, http.StatusOK, runs)
+}
+
 func parseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }

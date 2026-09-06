@@ -15,6 +15,9 @@ type Repository interface {
 	ClaimNextJob(ctx context.Context) (*Job, error)
 	CompleteJob(ctx context.Context, jobID uuid.UUID) error
 	FailJob(ctx context.Context, jobID uuid.UUID, jobErr string, retry bool) error
+
+	CreateAgentRun(ctx context.Context, run *AgentRun) error
+	ListAgentRuns(ctx context.Context, incidentID uuid.UUID) ([]AgentRun, error)
 }
 
 // JobNotifier notifies workers that a new job is available.

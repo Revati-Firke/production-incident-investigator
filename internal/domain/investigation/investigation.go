@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -38,14 +39,17 @@ const (
 
 // Investigation tracks the investigation lifecycle for an incident.
 type Investigation struct {
-	ID          uuid.UUID           `json:"id"`
-	IncidentID  uuid.UUID           `json:"incident_id"`
-	Status      InvestigationStatus `json:"status"`
-	StartedAt   *time.Time          `json:"started_at,omitempty"`
-	CompletedAt *time.Time          `json:"completed_at,omitempty"`
-	Error       string              `json:"error,omitempty"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
+	ID               uuid.UUID           `json:"id"`
+	IncidentID       uuid.UUID           `json:"incident_id"`
+	Status           InvestigationStatus `json:"status"`
+	StartedAt        *time.Time          `json:"started_at,omitempty"`
+	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
+	Error            string              `json:"error,omitempty"`
+	RootCause        json.RawMessage     `json:"root_cause,omitempty"`
+	Confidence       *float64            `json:"confidence,omitempty"`
+	ReasoningSummary string              `json:"reasoning_summary,omitempty"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
 }
 
 // Job represents a durable investigation job.

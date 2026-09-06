@@ -49,6 +49,8 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgres://opspilot:opspilot@postgres:5432/opspilot?sslmode=disable
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: mock
+      LLM_MODEL: mock-rca-v1
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -71,6 +73,8 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgres://opspilot:opspilot@postgres:5432/opspilot?sslmode=disable
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: mock
+      LLM_MODEL: mock-rca-v1
     depends_on:
       migrate:
         condition: service_completed_successfully

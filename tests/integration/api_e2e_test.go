@@ -139,8 +139,49 @@ func TestIncidentLifecycleE2E(t *testing.T) {
 		Status string `json:"status"`
 	}
 	_ = json.Unmarshal(incResp.Data, &inc)
-	if inc.Status != "INVESTIGATING" {
-		t.Errorf("incident status = %s, want INVESTIGATING (phase 2 stub)", inc.Status)
+	if inc.Status != "ROOT_CAUSE_IDENTIFIED" && inc.Status != "INVESTIGATING" {
+		t.Errorf("incident status = %s, want ROOT_CAUSE_IDENTIFIED (or INVESTIGATING if transition raced)", inc.Status)
+	}
+
+	// Prefer waiting until RCA is persisted on investigation
+	var confidence float64
+	var hasRootCause bool
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		invResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s/investigation", baseURL(), incidentID))
+		if err != nil {
+			t.Fatalf("get investigation rca: %v", err)
+		}
+		var inv struct {
+			Status     string          `json:"status"`
+			RootCause  json.RawMessage `json:"root_cause"`
+			Confidence *float64        `json:"confidence"`
+		}
+		_ = json.Unmarshal(invResp.Data, &inv)
+		if len(inv.RootCause) > 0 && inv.Confidence != nil {
+			hasRootCause = true
+			confidence = *inv.Confidence
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !hasRootCause {
+		t.Fatal("expected investigation root_cause and confidence from AI agent")
+	}
+	if confidence < 0.8 {
+		t.Errorf("confidence = %v, want >= 0.8 for payment-service DB exhaustion scenario", confidence)
+	}
+
+	runsResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s/agent-runs", baseURL(), incidentID))
+	if err != nil {
+		t.Fatalf("get agent runs: %v", err)
+	}
+	var runs []map[string]any
+	if err := json.Unmarshal(runsResp.Data, &runs); err != nil {
+		t.Fatalf("unmarshal agent runs: %v", err)
+	}
+	if len(runs) < 1 {
+		t.Fatal("expected at least one agent run")
 	}
 
 	timelineResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s/timeline", baseURL(), incidentID))
@@ -155,7 +196,7 @@ func TestIncidentLifecycleE2E(t *testing.T) {
 		t.Fatalf("timeline events = %d, want >= 3", len(events))
 	}
 
-	// Phase 3: worker runs tools; evidence should be populated
+	// Phase 3+: worker runs tools; evidence should be populated
 	var evidenceCount int
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -204,7 +245,9 @@ func TestToolsAPI(t *testing.T) {
 	var created apiResponse
 	_ = json.NewDecoder(resp.Body).Decode(&created)
 	var data struct {
-		Incident struct{ ID string `json:"id"` } `json:"incident"`
+		Incident struct {
+			ID string `json:"id"`
+		} `json:"incident"`
 	}
 	_ = json.Unmarshal(created.Data, &data)
 	incidentID := data.Incident.ID

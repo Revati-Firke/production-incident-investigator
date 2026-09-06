@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,10 +10,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Revati-Firke/production-incident-investigator/internal/agent/agents"
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 	domain "github.com/Revati-Firke/production-incident-investigator/internal/domain/incident"
 	invdomain "github.com/Revati-Firke/production-incident-investigator/internal/domain/investigation"
+	domaintool "github.com/Revati-Firke/production-incident-investigator/internal/domain/tool"
 )
 
 // defaultInvestigationTools are read-only tools run during automated triage.
@@ -72,7 +75,6 @@ func (s *Service) Notify(ctx context.Context, jobID uuid.UUID) error {
 }
 
 // Enqueue creates an investigation and job, then notifies workers.
-// Prefer Orchestrator.CreateIncident for API intake to keep incident and job atomic.
 func (s *Service) Enqueue(ctx context.Context, incidentID uuid.UUID) (*invdomain.Investigation, uuid.UUID, error) {
 	inv, job := s.NewJob(incidentID)
 
@@ -92,19 +94,31 @@ func (s *Service) GetByIncidentID(ctx context.Context, incidentID uuid.UUID) (*i
 	return s.repo.GetByIncidentID(ctx, incidentID)
 }
 
+// ListAgentRuns returns agent runs for an incident.
+func (s *Service) ListAgentRuns(ctx context.Context, incidentID uuid.UUID) ([]invdomain.AgentRun, error) {
+	return s.repo.ListAgentRuns(ctx, incidentID)
+}
+
 // Processor handles investigation job execution.
 type Processor struct {
 	repo      invdomain.Repository
 	incidents *appincident.Service
 	notifier  invdomain.JobNotifier
 	tools     *apptool.Service
+	agent     *agents.InvestigationAgent
 
 	wg sync.WaitGroup
 }
 
 // NewProcessor creates a new investigation processor.
-func NewProcessor(repo invdomain.Repository, incidents *appincident.Service, notifier invdomain.JobNotifier, tools *apptool.Service) *Processor {
-	return &Processor{repo: repo, incidents: incidents, notifier: notifier, tools: tools}
+func NewProcessor(
+	repo invdomain.Repository,
+	incidents *appincident.Service,
+	notifier invdomain.JobNotifier,
+	tools *apptool.Service,
+	agent *agents.InvestigationAgent,
+) *Processor {
+	return &Processor{repo: repo, incidents: incidents, notifier: notifier, tools: tools, agent: agent}
 }
 
 // ProcessNext claims and processes a single job. Returns nil when no jobs are available.
@@ -228,16 +242,71 @@ func (p *Processor) runInvestigation(ctx context.Context, job *invdomain.Job) er
 		return fmt.Errorf("transition to investigating: %w", err)
 	}
 
+	var evidence []domaintool.Execution
 	if p.tools != nil {
-		executions, err := p.tools.ExecuteBatch(ctx, job.IncidentID, inv.ID, defaultInvestigationTools, "investigation-worker")
+		batch, err := p.tools.ExecuteBatch(ctx, job.IncidentID, inv.ID, defaultInvestigationTools, "investigation-worker")
 		if err != nil {
-			slog.Warn("investigation tool batch partial failure", "error", err, "completed", len(executions))
+			slog.Warn("investigation tool batch partial failure", "error", err, "completed", len(batch))
 		} else {
-			slog.Info("investigation tools executed", "count", len(executions), "incident_id", job.IncidentID)
+			slog.Info("investigation tools executed", "count", len(batch), "incident_id", job.IncidentID)
+		}
+		evidence = batch
+	}
+
+	if p.agent != nil {
+		incident, err := p.incidents.GetByID(ctx, job.IncidentID)
+		if err != nil {
+			return fmt.Errorf("get incident for agent: %w", err)
+		}
+
+		result, err := p.agent.Run(ctx, agents.Input{
+			Incident:      incident,
+			Investigation: inv,
+			Evidence:      evidence,
+		})
+		if err != nil {
+			return fmt.Errorf("investigation agent: %w", err)
+		}
+
+		if result.AgentRun != nil {
+			if saveErr := p.repo.CreateAgentRun(ctx, result.AgentRun); saveErr != nil {
+				slog.Error("failed to persist agent run", "error", saveErr)
+			}
+		}
+
+		if result.WaitingForAI {
+			inv.Status = invdomain.StatusWaitingForAI
+			inv.UpdatedAt = time.Now().UTC()
+			if result.AgentRun != nil {
+				inv.Error = result.AgentRun.Error
+			}
+			if err := p.repo.UpdateInvestigation(ctx, inv); err != nil {
+				return fmt.Errorf("mark waiting_for_ai: %w", err)
+			}
+			slog.Warn("investigation waiting for AI", "incident_id", job.IncidentID)
+			return nil
+		}
+
+		if result.RCA != nil {
+			rcaJSON, err := json.Marshal(result.RCA)
+			if err != nil {
+				return fmt.Errorf("marshal rca: %w", err)
+			}
+			conf := result.RCA.Confidence
+			inv.RootCause = rcaJSON
+			inv.Confidence = &conf
+			inv.ReasoningSummary = result.RCA.ReasoningSummary
+
+			if _, err := p.incidents.Transition(ctx, domain.TransitionInput{
+				IncidentID: job.IncidentID,
+				ToStatus:   domain.StatusRootCauseIdentified,
+				Message:    fmt.Sprintf("Root cause identified (confidence %.0f%%)", conf*100),
+			}); err != nil {
+				slog.Warn("failed to transition to ROOT_CAUSE_IDENTIFIED", "error", err)
+			}
 		}
 	}
 
-	// Phase 3: tools collect evidence; AI agent analysis runs in Phase 4.
 	completedAt := time.Now().UTC()
 	inv.Status = invdomain.StatusCompleted
 	inv.CompletedAt = &completedAt

@@ -4,7 +4,7 @@
 
 OpsPilot receives production alerts, investigates incidents using AI agents and observability tools, determines probable root causes, and coordinates human-approved remediation — with a full audit trail.
 
-> **Status:** Phase 3 (Tool Framework) complete. Generic tool system with permissions, mock adapters, audit trail, and worker integration.
+> **Status:** Phase 4 (AI Agent) complete. LLM abstraction, investigation agent, structured RCA, and agent-run audit trail are operational.
 
 ## Project Overview
 
@@ -64,7 +64,7 @@ flowchart LR
 | Optimistic locking | Status transitions use `WHERE status = expected` |
 | Worker graceful shutdown | Waits for in-flight jobs before exit |
 
-## Phase 3 — Tool Framework (Current)
+## Phase 3 — Tool Framework
 
 ### Implemented
 
@@ -98,6 +98,51 @@ flowchart LR
 | `search_previous_incidents` | READ_ONLY | Knowledge |
 | `send_slack_notification` | AUTONOMOUS | Communication |
 
+## Phase 4 — AI Agent (Current)
+
+### Implemented
+
+| Component | Description |
+|-----------|-------------|
+| LLM abstraction | Replaceable `llm.Provider` interface |
+| Mock LLM | Deterministic evidence-based RCA (default, no API key) |
+| OpenAI provider | OpenAI-compatible Chat Completions adapter |
+| Investigation agent | Tool-calling loop + structured RCA validation |
+| Short-term memory | Incident context, tool results, hypotheses |
+| RCA persistence | `investigations.root_cause`, `confidence`, `reasoning_summary` |
+| Agent runs | `agent_runs` audit table with tokens/duration/result |
+| Worker integration | Tools → agent → `ROOT_CAUSE_IDENTIFIED` |
+| Graceful degradation | LLM failure → `waiting_for_ai` without crashing worker |
+| Agent API | `GET /api/v1/incidents/{id}/agent-runs` |
+
+### AI Investigation Flow
+
+```text
+Incident job claimed
+  → triage + collect evidence via tools
+  → investigation agent (LLM)
+       → optional follow-up READ_ONLY tool calls
+       → structured RCA JSON (validated)
+  → persist agent_run + RCA
+  → incident → ROOT_CAUSE_IDENTIFIED
+  → investigation → completed
+```
+
+### RCA Output Shape
+
+```json
+{
+  "summary": "...",
+  "root_cause": "...",
+  "confidence": 0.91,
+  "severity": "critical",
+  "evidence": [{"id":"E-001","source":"logs","finding":"..."}],
+  "rejected_hypotheses": [{"hypothesis":"...","reason":"..."}],
+  "recommended_actions": ["..."],
+  "reasoning_summary": "..."
+}
+```
+
 ### Directory Structure
 
 ```
@@ -116,6 +161,9 @@ production-incident-investigator/
 │   │   ├── investigation/   # Orchestrator, processor, intake
 │   │   └── tool/            # Tool listing and execution
 │   ├── agent/
+│   │   ├── agents/          # Investigation agent
+│   │   ├── llm/             # LLM provider interface + openai/mock
+│   │   ├── memory/          # Short-term investigation memory
 │   │   ├── tools/           # Tool interface, registry, executor
 │   │   │   └── mocks/       # Mock tool implementations
 │   │   └── wiring/          # Dependency wiring
@@ -244,6 +292,18 @@ curl -X POST http://localhost:8080/api/v1/incidents/{id}/tools/create_github_iss
 curl http://localhost:8080/api/v1/incidents/{id}/evidence
 ```
 
+### Get Investigation (includes RCA)
+
+```bash
+curl http://localhost:8080/api/v1/incidents/{id}/investigation
+```
+
+### Get Agent Runs
+
+```bash
+curl http://localhost:8080/api/v1/incidents/{id}/agent-runs
+```
+
 ### Health
 
 ```bash
@@ -305,6 +365,11 @@ See [`.env.example`](.env.example) for all variables.
 | HTTP_PORT | No | Default: 8080 |
 | APP_ENV | No | Default: development |
 | LOG_LEVEL | No | debug, info, warn, error |
+| LLM_PROVIDER | No | `mock` (default) or `openai` |
+| LLM_MODEL | No | Model name / mock model id |
+| LLM_API_KEY | For openai | API key for OpenAI-compatible providers |
+| LLM_BASE_URL | No | Default: `https://api.openai.com/v1` |
+| LLM_TIMEOUT | No | Default: 60s |
 
 ## Testing
 
@@ -324,7 +389,7 @@ go test -tags=integration ./tests/integration/... -v
 | 1 — Foundation | ✅ Complete | HTTP, PostgreSQL, Redis, incident API |
 | 2 — Incident Engine | ✅ Complete | Worker, job queue, investigation model |
 | 3 — Tool Framework | ✅ Complete | Tool registry, permissions, mocks, evidence API |
-| 4 — AI Agent | Planned | LLM abstraction, orchestration, memory |
+| 4 — AI Agent | ✅ Complete | LLM abstraction, investigation agent, structured RCA |
 | 5 — RAG | Planned | Document ingestion, pgvector |
 | 6 — Integrations | Planned | GitHub, Slack, Grafana, Prometheus, Loki |
 | 7 — Human Approval | Planned | Approval workflow, action execution |
