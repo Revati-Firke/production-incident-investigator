@@ -12,6 +12,7 @@ import (
 
 	"github.com/Revati-Firke/production-incident-investigator/internal/agent/agents"
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
+	appremediation "github.com/Revati-Firke/production-incident-investigator/internal/application/remediation"
 	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 	domain "github.com/Revati-Firke/production-incident-investigator/internal/domain/incident"
 	invdomain "github.com/Revati-Firke/production-incident-investigator/internal/domain/investigation"
@@ -101,11 +102,12 @@ func (s *Service) ListAgentRuns(ctx context.Context, incidentID uuid.UUID) ([]in
 
 // Processor handles investigation job execution.
 type Processor struct {
-	repo      invdomain.Repository
-	incidents *appincident.Service
-	notifier  invdomain.JobNotifier
-	tools     *apptool.Service
-	agent     *agents.InvestigationAgent
+	repo         invdomain.Repository
+	incidents    *appincident.Service
+	notifier     invdomain.JobNotifier
+	tools        *apptool.Service
+	agent        *agents.InvestigationAgent
+	remediations *appremediation.Service
 
 	wg sync.WaitGroup
 }
@@ -117,8 +119,16 @@ func NewProcessor(
 	notifier invdomain.JobNotifier,
 	tools *apptool.Service,
 	agent *agents.InvestigationAgent,
+	remediations *appremediation.Service,
 ) *Processor {
-	return &Processor{repo: repo, incidents: incidents, notifier: notifier, tools: tools, agent: agent}
+	return &Processor{
+		repo:         repo,
+		incidents:    incidents,
+		notifier:     notifier,
+		tools:        tools,
+		agent:        agent,
+		remediations: remediations,
+	}
 }
 
 // ProcessNext claims and processes a single job. Returns nil when no jobs are available.
@@ -303,6 +313,12 @@ func (p *Processor) runInvestigation(ctx context.Context, job *invdomain.Job) er
 				Message:    fmt.Sprintf("Root cause identified (confidence %.0f%%)", conf*100),
 			}); err != nil {
 				slog.Warn("failed to transition to ROOT_CAUSE_IDENTIFIED", "error", err)
+			}
+
+			if p.remediations != nil {
+				if _, err := p.remediations.ProposeFromRCA(ctx, job.IncidentID, inv.ID, result.RCA); err != nil {
+					slog.Warn("failed to auto-propose remediation", "error", err, "incident_id", job.IncidentID)
+				}
 			}
 		}
 	}

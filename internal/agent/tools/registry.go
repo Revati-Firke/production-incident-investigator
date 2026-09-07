@@ -36,6 +36,22 @@ func (r *Registry) Register(tool Tool) error {
 	return nil
 }
 
+// Replace registers a tool, overwriting any existing tool with the same name.
+func (r *Registry) Replace(tool Tool) error {
+	if tool == nil {
+		return fmt.Errorf("tool is nil")
+	}
+	name := tool.Name()
+	if name == "" {
+		return fmt.Errorf("tool name is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[name] = tool
+	return nil
+}
+
 // Get returns a tool by name.
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mu.RLock()

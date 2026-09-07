@@ -6,22 +6,20 @@ import (
 	"fmt"
 
 	"github.com/Revati-Firke/production-incident-investigator/internal/agent/tools"
+	inttools "github.com/Revati-Firke/production-incident-investigator/internal/agent/tools/integrations"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/github"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/grafana"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/loki"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/prometheus"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/slack"
 )
 
-// RegisterCore registers mock tools except knowledge (RAG-backed in Phase 5).
-func RegisterCore(r *tools.Registry) error {
+// RegisterLocal registers tools that stay mock-only (DB diagnostics + deployments).
+func RegisterLocal(r *tools.Registry) error {
 	all := []tools.Tool{
-		&searchLogsTool{},
-		&queryMetricsTool{},
-		&serviceHealthTool{},
 		&queryDatabaseTool{},
 		&dbConnectionsTool{},
 		&recentDeploymentsTool{},
-		&searchCommitsTool{},
-		&inspectCodeTool{},
-		&createIssueTool{},
-		&createPRTool{},
-		&slackNotifyTool{},
 	}
 	for _, t := range all {
 		if err := r.Register(t); err != nil {
@@ -29,6 +27,52 @@ func RegisterCore(r *tools.Registry) error {
 		}
 	}
 	return nil
+}
+
+// RegisterIntegrationMocks registers Phase 6 tools backed by mock adapters.
+func RegisterIntegrationMocks(r *tools.Registry) error {
+	return RegisterIntegrations(r,
+		loki.NewMock(),
+		prometheus.NewMock(),
+		grafana.NewMock(),
+		github.NewMock(),
+		slack.NewMock(),
+	)
+}
+
+// RegisterIntegrations registers observability / GitHub / Slack tools.
+func RegisterIntegrations(
+	r *tools.Registry,
+	logs loki.Client,
+	metrics prometheus.Client,
+	health grafana.Client,
+	gh github.Client,
+	sl slack.Client,
+) error {
+	all := []tools.Tool{
+		inttools.NewSearchLogsTool(logs),
+		inttools.NewQueryMetricsTool(metrics),
+		inttools.NewServiceHealthTool(health),
+		inttools.NewSearchCommitsTool(gh),
+		inttools.NewInspectCodeTool(gh),
+		inttools.NewCreateIssueTool(gh),
+		inttools.NewCreatePRTool(gh),
+		inttools.NewSlackNotifyTool(sl),
+	}
+	for _, t := range all {
+		if err := r.Register(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RegisterCore registers local + integration mocks (no knowledge tools).
+func RegisterCore(r *tools.Registry) error {
+	if err := RegisterLocal(r); err != nil {
+		return err
+	}
+	return RegisterIntegrationMocks(r)
 }
 
 // RegisterKnowledgeMocks registers hardcoded knowledge tools (unit tests / RAG disabled).
@@ -68,31 +112,12 @@ func unmarshalInput(input json.RawMessage, dest any) error {
 	return nil
 }
 
-// Re-export tool implementations with correct interface signatures below.
-
-type searchLogsTool struct{ SearchLogsTool }
-type queryMetricsTool struct{ QueryMetricsTool }
-type serviceHealthTool struct{ ServiceHealthTool }
 type queryDatabaseTool struct{ QueryDatabaseTool }
 type dbConnectionsTool struct{ DBConnectionsTool }
 type recentDeploymentsTool struct{ RecentDeploymentsTool }
-type searchCommitsTool struct{ SearchCommitsTool }
-type inspectCodeTool struct{ InspectCodeTool }
-type createIssueTool struct{ CreateIssueTool }
-type createPRTool struct{ CreatePRTool }
 type searchRunbooksTool struct{ SearchRunbooksTool }
 type searchIncidentsTool struct{ SearchIncidentsTool }
-type slackNotifyTool struct{ SlackNotifyTool }
 
-func (t *searchLogsTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.SearchLogsTool.Execute(toolCtx, input)
-}
-func (t *queryMetricsTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.QueryMetricsTool.Execute(toolCtx, input)
-}
-func (t *serviceHealthTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.ServiceHealthTool.Execute(toolCtx, input)
-}
 func (t *queryDatabaseTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
 	return t.QueryDatabaseTool.Execute(toolCtx, input)
 }
@@ -102,24 +127,9 @@ func (t *dbConnectionsTool) Execute(ctx context.Context, input json.RawMessage, 
 func (t *recentDeploymentsTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
 	return t.RecentDeploymentsTool.Execute(toolCtx, input)
 }
-func (t *searchCommitsTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.SearchCommitsTool.Execute(toolCtx, input)
-}
-func (t *inspectCodeTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.InspectCodeTool.Execute(toolCtx, input)
-}
-func (t *createIssueTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.CreateIssueTool.Execute(toolCtx, input)
-}
-func (t *createPRTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.CreatePRTool.Execute(toolCtx, input)
-}
 func (t *searchRunbooksTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
 	return t.SearchRunbooksTool.Execute(toolCtx, input)
 }
 func (t *searchIncidentsTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
 	return t.SearchIncidentsTool.Execute(toolCtx, input)
-}
-func (t *slackNotifyTool) Execute(ctx context.Context, input json.RawMessage, toolCtx tools.Context) (tools.Result, error) {
-	return t.SlackNotifyTool.Execute(toolCtx, input)
 }

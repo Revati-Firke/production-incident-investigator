@@ -139,8 +139,11 @@ func TestIncidentLifecycleE2E(t *testing.T) {
 		Status string `json:"status"`
 	}
 	_ = json.Unmarshal(incResp.Data, &inc)
-	if inc.Status != "ROOT_CAUSE_IDENTIFIED" && inc.Status != "INVESTIGATING" {
-		t.Errorf("incident status = %s, want ROOT_CAUSE_IDENTIFIED (or INVESTIGATING if transition raced)", inc.Status)
+	switch inc.Status {
+	case "ROOT_CAUSE_IDENTIFIED", "REMEDIATION_PROPOSED", "WAITING_FOR_APPROVAL", "INVESTIGATING":
+		// ok — Phase 7 auto-proposes and may already be waiting for approval
+	default:
+		t.Errorf("incident status = %s, want ROOT_CAUSE_IDENTIFIED / WAITING_FOR_APPROVAL (or intermediate)", inc.Status)
 	}
 
 	// Prefer waiting until RCA is persisted on investigation
@@ -353,6 +356,117 @@ func TestRAGDocumentsAndSearch(t *testing.T) {
 	}
 	if len(result.Hits) == 0 {
 		t.Fatal("expected RAG hits for connection pool query")
+	}
+}
+
+func TestIntegrationsStatusAndGrafanaWebhook(t *testing.T) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	statusResp, err := getJSON(client, baseURL()+"/integrations")
+	if err != nil {
+		t.Fatalf("integrations status: %v", err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(statusResp.Data, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	for _, key := range []string{"loki", "prometheus", "grafana", "github", "slack"} {
+		if _, ok := status[key]; !ok {
+			t.Fatalf("missing integration key %q", key)
+		}
+	}
+
+	payload := []byte(`{
+		"title":"IntegrationWebhookTest",
+		"status":"firing",
+		"commonLabels":{
+			"alertname":"IntegrationWebhookTest",
+			"service":"payment-service",
+			"environment":"production",
+			"severity":"high"
+		},
+		"alerts":[{"annotations":{"summary":"Phase 6 webhook e2e"}}]
+	}`)
+	resp, err := client.Post(baseURL()+"/webhooks/grafana", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("grafana webhook: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("webhook status %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestRemediationApprovalE2E(t *testing.T) {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	payload, _ := json.Marshal(map[string]string{
+		"title": "Approval E2E", "severity": "critical",
+		"service": "payment-service", "environment": "production",
+		"description": "Phase 7 approval flow", "alert_source": "integration-test",
+	})
+	resp, err := client.Post(baseURL()+"/incidents", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	var created apiResponse
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	var data struct {
+		Incident struct {
+			ID string `json:"id"`
+		} `json:"incident"`
+	}
+	_ = json.Unmarshal(created.Data, &data)
+	incidentID := data.Incident.ID
+	if incidentID == "" {
+		t.Fatal("missing incident id")
+	}
+
+	var proposalID string
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		listResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s/remediations", baseURL(), incidentID))
+		if err == nil {
+			var items []map[string]any
+			if err := json.Unmarshal(listResp.Data, &items); err == nil && len(items) > 0 {
+				if id, ok := items[0]["id"].(string); ok && id != "" {
+					proposalID = id
+					break
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if proposalID == "" {
+		t.Fatal("expected auto-proposed remediation")
+	}
+
+	approveBody, _ := json.Marshal(map[string]string{"actor": "e2e-tester", "comment": "approved in test"})
+	approveResp, err := client.Post(
+		fmt.Sprintf("%s/incidents/%s/remediations/%s/approve", baseURL(), incidentID, proposalID),
+		"application/json", bytes.NewReader(approveBody),
+	)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	defer approveResp.Body.Close()
+	if approveResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(approveResp.Body)
+		t.Fatalf("approve status %d: %s", approveResp.StatusCode, body)
+	}
+
+	incResp, err := getJSON(client, fmt.Sprintf("%s/incidents/%s", baseURL(), incidentID))
+	if err != nil {
+		t.Fatalf("get incident: %v", err)
+	}
+	var inc struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(incResp.Data, &inc)
+	if inc.Status != "RESOLVED" && inc.Status != "REMEDIATION_EXECUTED" {
+		t.Fatalf("incident status after approve = %s, want RESOLVED", inc.Status)
 	}
 }
 

@@ -13,10 +13,12 @@ import (
 	"github.com/Revati-Firke/production-incident-investigator/internal/agent/wiring"
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	appinvestigation "github.com/Revati-Firke/production-incident-investigator/internal/application/investigation"
+	appremediation "github.com/Revati-Firke/production-incident-investigator/internal/application/remediation"
 	"github.com/Revati-Firke/production-incident-investigator/internal/config"
 	"github.com/Revati-Firke/production-incident-investigator/internal/infrastructure/postgres"
 	"github.com/Revati-Firke/production-incident-investigator/internal/infrastructure/redis"
 	"github.com/Revati-Firke/production-incident-investigator/internal/pkg/logger"
+	"github.com/Revati-Firke/production-incident-investigator/internal/pkg/otelx"
 	transporthttp "github.com/Revati-Firke/production-incident-investigator/internal/transport/http"
 )
 
@@ -34,6 +36,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	shutdownTracer, err := otelx.Setup(ctx, cfg.OTelService+"-api", cfg.OTelEndpoint)
+	if err != nil {
+		log.Warn("otel setup failed", "error", err)
+	} else {
+		defer func() { _ = shutdownTracer(context.Background()) }()
+	}
 
 	dbPool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -56,6 +65,7 @@ func main() {
 	incidentRepo := postgres.NewIncidentRepository(dbPool)
 	investigationRepo := postgres.NewInvestigationRepository(dbPool)
 	intakeRepo := postgres.NewIntakeRepository(dbPool)
+	remediationRepo := postgres.NewRemediationRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
 	toolBundle, err := wiring.NewToolBundle(*cfg, dbPool, incidentRepo)
@@ -72,6 +82,7 @@ func main() {
 	incidentSvc := appincident.NewService(incidentRepo)
 	investigationSvc := appinvestigation.NewService(investigationRepo, jobQueue)
 	orchestrator := appinvestigation.NewOrchestrator(incidentSvc, investigationSvc, intakeRepo)
+	remediationSvc := appremediation.NewService(remediationRepo, incidentSvc, toolBundle.Service, cfg.PublicURL)
 
 	router := transporthttp.NewRouter(transporthttp.RouterDeps{
 		Log:          log,
@@ -79,10 +90,16 @@ func main() {
 		Orchestrator: orchestrator,
 		Tools:        toolBundle.Service,
 		RAG:          toolBundle.RAG,
+		Remediations: remediationSvc,
+		Integrations: toolBundle.Integrations,
 		Health: transporthttp.HealthDeps{
 			Postgres: dbPool,
 			Redis:    redisClient,
 		},
+		CORSOrigins:          cfg.CORSOrigins,
+		APIKey:               cfg.APIKey,
+		RateLimiter:          transporthttp.NewMemoryRateLimiter(),
+		GrafanaWebhookSecret: cfg.GrafanaWebhookSecret,
 	})
 
 	server := transporthttp.NewServer(transporthttp.ServerConfig{

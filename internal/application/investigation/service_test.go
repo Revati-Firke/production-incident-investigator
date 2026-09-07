@@ -178,7 +178,7 @@ func TestProcessor_ProcessNext(t *testing.T) {
 
 	incSvc := appincident.NewService(incRepo)
 	invSvc := appinvestigation.NewService(invRepo, notifier)
-	processor := appinvestigation.NewProcessor(invRepo, incSvc, notifier, nil, nil)
+	processor := appinvestigation.NewProcessor(invRepo, incSvc, notifier, nil, nil, nil)
 
 	inc, err := incSvc.Create(context.Background(), domain.CreateInput{
 		Title:       "Worker test",

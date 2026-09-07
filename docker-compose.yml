@@ -57,6 +57,13 @@ services:
       RAG_SEED_DIR: /app/data/knowledge
       EMBEDDING_PROVIDER: mock
       EMBEDDING_MODEL: mock-embed-v1
+      LOKI_PROVIDER: mock
+      PROMETHEUS_PROVIDER: mock
+      GRAFANA_PROVIDER: mock
+      GITHUB_PROVIDER: mock
+      SLACK_PROVIDER: mock
+      PUBLIC_URL: http://localhost:8080
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8088
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,6 +93,12 @@ services:
       RAG_SEED_DIR: /app/data/knowledge
       EMBEDDING_PROVIDER: mock
       EMBEDDING_MODEL: mock-embed-v1
+      LOKI_PROVIDER: mock
+      PROMETHEUS_PROVIDER: mock
+      GRAFANA_PROVIDER: mock
+      GITHUB_PROVIDER: mock
+      SLACK_PROVIDER: mock
+      PUBLIC_URL: http://localhost:8080
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -94,6 +107,16 @@ services:
       opspilot-api:
         condition: service_healthy
     restart: unless-stopped
+
+  opspilot-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "8088:80"
+    depends_on:
+      opspilot-api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

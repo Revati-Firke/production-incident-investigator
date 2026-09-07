@@ -13,10 +13,12 @@ import (
 	"github.com/Revati-Firke/production-incident-investigator/internal/agent/wiring"
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	appinvestigation "github.com/Revati-Firke/production-incident-investigator/internal/application/investigation"
+	appremediation "github.com/Revati-Firke/production-incident-investigator/internal/application/remediation"
 	"github.com/Revati-Firke/production-incident-investigator/internal/config"
 	"github.com/Revati-Firke/production-incident-investigator/internal/infrastructure/postgres"
 	"github.com/Revati-Firke/production-incident-investigator/internal/infrastructure/redis"
 	"github.com/Revati-Firke/production-incident-investigator/internal/pkg/logger"
+	"github.com/Revati-Firke/production-incident-investigator/internal/pkg/otelx"
 )
 
 func main() {
@@ -33,6 +35,13 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	shutdownTracer, err := otelx.Setup(ctx, cfg.OTelService+"-worker", cfg.OTelEndpoint)
+	if err != nil {
+		log.Warn("otel setup failed", "error", err)
+	} else {
+		defer func() { _ = shutdownTracer(context.Background()) }()
+	}
 
 	dbPool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -54,6 +63,7 @@ func main() {
 
 	incidentRepo := postgres.NewIncidentRepository(dbPool)
 	investigationRepo := postgres.NewInvestigationRepository(dbPool)
+	remediationRepo := postgres.NewRemediationRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
 	toolBundle, err := wiring.NewToolBundle(*cfg, dbPool, incidentRepo)
@@ -73,7 +83,8 @@ func main() {
 	}
 
 	incidentSvc := appincident.NewService(incidentRepo)
-	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue, toolBundle.Service, agent)
+	remediationSvc := appremediation.NewService(remediationRepo, incidentSvc, toolBundle.Service, cfg.PublicURL)
+	processor := appinvestigation.NewProcessor(investigationRepo, incidentSvc, jobQueue, toolBundle.Service, agent, remediationSvc)
 
 	log.Info("worker ready, waiting for investigation jobs")
 

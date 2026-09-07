@@ -1,0 +1,18 @@
+{
+  "title": "OpsPilot Overview",
+  "uid": "opspilot-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "text",
+      "title": "OpsPilot",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "## OpsPilot overview\n\nImport this dashboard alongside an OTLP-backed Grafana Tempo/Prometheus stack.\n\nUseful queries:\n- Investigation job duration (custom spans)\n- HTTP request rate on OpsPilot API\n- Approval queue depth via API scrape / metrics"
+      }
+    }
+  ]
+}

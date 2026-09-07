@@ -42,4 +42,10 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.RAGTopK != 5 {
 		t.Errorf("RAGTopK = %d", cfg.RAGTopK)
 	}
+	if cfg.LokiProvider != "mock" || cfg.PrometheusProvider != "mock" {
+		t.Errorf("integration providers want mock, got loki=%s prom=%s", cfg.LokiProvider, cfg.PrometheusProvider)
+	}
+	if cfg.GitHubProvider != "mock" || cfg.SlackProvider != "mock" || cfg.GrafanaProvider != "mock" {
+		t.Errorf("github/slack/grafana providers want mock")
+	}
 }

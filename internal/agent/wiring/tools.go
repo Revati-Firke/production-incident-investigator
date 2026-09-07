@@ -20,14 +20,21 @@ import (
 	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 	"github.com/Revati-Firke/production-incident-investigator/internal/config"
 	"github.com/Revati-Firke/production-incident-investigator/internal/infrastructure/postgres"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/github"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/grafana"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/loki"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/prometheus"
+	"github.com/Revati-Firke/production-incident-investigator/internal/integrations/slack"
 )
 
 // ToolBundle holds wired tool components.
 type ToolBundle struct {
-	Registry *tools.Registry
-	Executor *tools.Executor
-	Service  *apptool.Service
-	RAG      *apprag.Service
+	Registry     *tools.Registry
+	Executor     *tools.Executor
+	Service      *apptool.Service
+	RAG          *apprag.Service
+	Integrations integrations.Status
 }
 
 // NewToolService wires the tool registry, executor, and application service.
@@ -39,11 +46,44 @@ func NewToolService(cfg config.Config, pool *postgres.Pool, incidentRepo *postgr
 	return bundle.Executor, bundle.Service, nil
 }
 
-// NewToolBundle wires tools (including Phase 5 RAG knowledge tools when enabled).
+// NewToolBundle wires tools including Phase 5 RAG and Phase 6 integrations.
 func NewToolBundle(cfg config.Config, pool *postgres.Pool, incidentRepo *postgres.IncidentRepository) (*ToolBundle, error) {
 	registry := tools.NewRegistry()
-	if err := mocks.RegisterCore(registry); err != nil {
+	if err := mocks.RegisterLocal(registry); err != nil {
 		return nil, err
+	}
+
+	logsClient, err := newLokiClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	metricsClient, err := newPrometheusClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	healthClient, err := newGrafanaClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	ghClient, err := newGitHubClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	slackClient, err := newSlackClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := mocks.RegisterIntegrations(registry, logsClient, metricsClient, healthClient, ghClient, slackClient); err != nil {
+		return nil, err
+	}
+
+	status := integrations.Status{
+		Loki:       endpointStatus(logsClient.Provider(), cfg.LokiURL != "" || logsClient.Provider() == integrations.ProviderMock, cfg.LokiURL),
+		Prometheus: endpointStatus(metricsClient.Provider(), cfg.PrometheusURL != "" || metricsClient.Provider() == integrations.ProviderMock, cfg.PrometheusURL),
+		Grafana:    endpointStatus(healthClient.Provider(), cfg.GrafanaURL != "" || healthClient.Provider() == integrations.ProviderMock, cfg.GrafanaURL),
+		GitHub:     endpointStatus(ghClient.Provider(), cfg.GitHubRepository != "" || ghClient.Provider() == integrations.ProviderMock, cfg.GitHubRepository),
+		Slack:      endpointStatus(slackClient.Provider(), cfg.SlackBotToken != "" || slackClient.Provider() == integrations.ProviderMock, cfg.SlackDefaultChannel),
 	}
 
 	var ragSvc *apprag.Service
@@ -73,7 +113,21 @@ func NewToolBundle(cfg config.Config, pool *postgres.Pool, incidentRepo *postgre
 	incidentCtx := appincident.NewIncidentContext(incidentRepo)
 	executor := tools.NewExecutor(registry, toolRepo, 30*time.Second)
 	svc := apptool.NewService(executor, toolRepo, incidentCtx)
-	return &ToolBundle{Registry: registry, Executor: executor, Service: svc, RAG: ragSvc}, nil
+	return &ToolBundle{
+		Registry:     registry,
+		Executor:     executor,
+		Service:      svc,
+		RAG:          ragSvc,
+		Integrations: status,
+	}, nil
+}
+
+func endpointStatus(provider string, configured bool, details string) integrations.EndpointStatus {
+	return integrations.EndpointStatus{
+		Provider:   provider,
+		Configured: configured,
+		Details:    details,
+	}
 }
 
 // SeedKnowledgeBase ingests seed markdown when configured and the store is empty.
@@ -141,5 +195,70 @@ func newEmbedder(cfg config.Config) (agentrag.Embedder, error) {
 		})
 	default:
 		return nil, fmt.Errorf("unsupported EMBEDDING_PROVIDER %q (use mock or openai)", cfg.EmbeddingProvider)
+	}
+}
+
+func newLokiClient(cfg config.Config) (loki.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.LokiProvider)) {
+	case "", integrations.ProviderMock:
+		return loki.NewMock(), nil
+	case integrations.ProviderLoki:
+		return loki.NewHTTP(loki.Config{BaseURL: cfg.LokiURL, Token: cfg.LokiToken, Timeout: cfg.IntegrationTimeout})
+	default:
+		return nil, fmt.Errorf("unsupported LOKI_PROVIDER %q (use mock or loki)", cfg.LokiProvider)
+	}
+}
+
+func newPrometheusClient(cfg config.Config) (prometheus.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.PrometheusProvider)) {
+	case "", integrations.ProviderMock:
+		return prometheus.NewMock(), nil
+	case integrations.ProviderProm:
+		return prometheus.NewHTTP(prometheus.Config{BaseURL: cfg.PrometheusURL, Token: cfg.PrometheusToken, Timeout: cfg.IntegrationTimeout})
+	default:
+		return nil, fmt.Errorf("unsupported PROMETHEUS_PROVIDER %q (use mock or prometheus)", cfg.PrometheusProvider)
+	}
+}
+
+func newGrafanaClient(cfg config.Config) (grafana.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.GrafanaProvider)) {
+	case "", integrations.ProviderMock:
+		return grafana.NewMock(), nil
+	case integrations.ProviderGrafana:
+		return grafana.NewHTTP(grafana.Config{BaseURL: cfg.GrafanaURL, Token: cfg.GrafanaToken, Timeout: cfg.IntegrationTimeout})
+	default:
+		return nil, fmt.Errorf("unsupported GRAFANA_PROVIDER %q (use mock or grafana)", cfg.GrafanaProvider)
+	}
+}
+
+func newGitHubClient(cfg config.Config) (github.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.GitHubProvider)) {
+	case "", integrations.ProviderMock:
+		return github.NewMock(), nil
+	case integrations.ProviderGitHub:
+		return github.NewHTTP(github.Config{
+			Token:        cfg.GitHubToken,
+			Repository:   cfg.GitHubRepository,
+			BaseURL:      cfg.GitHubBaseURL,
+			Timeout:      cfg.IntegrationTimeout,
+			WriteEnabled: cfg.GitHubWriteEnabled,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported GITHUB_PROVIDER %q (use mock or github)", cfg.GitHubProvider)
+	}
+}
+
+func newSlackClient(cfg config.Config) (slack.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.SlackProvider)) {
+	case "", integrations.ProviderMock:
+		return slack.NewMock(), nil
+	case integrations.ProviderSlack:
+		return slack.NewHTTP(slack.Config{
+			Token:          cfg.SlackBotToken,
+			DefaultChannel: cfg.SlackDefaultChannel,
+			Timeout:        cfg.IntegrationTimeout,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported SLACK_PROVIDER %q (use mock or slack)", cfg.SlackProvider)
 	}
 }

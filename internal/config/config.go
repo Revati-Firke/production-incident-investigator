@@ -41,6 +41,39 @@ type Config struct {
 	EmbeddingAPIKey   string
 	EmbeddingBaseURL  string
 	EmbeddingTimeout  time.Duration
+
+	// Integrations (Phase 6) — providers default to mock
+	LokiProvider        string
+	LokiURL             string
+	LokiToken           string
+	PrometheusProvider  string
+	PrometheusURL       string
+	PrometheusToken     string
+	GrafanaProvider     string
+	GrafanaURL          string
+	GrafanaToken        string
+	GitHubProvider      string
+	GitHubToken         string
+	GitHubRepository    string
+	GitHubBaseURL       string
+	GitHubWriteEnabled  bool
+	SlackProvider       string
+	SlackBotToken       string
+	SlackDefaultChannel string
+	IntegrationTimeout  time.Duration
+
+	// Phase 7+
+	PublicURL string
+
+	// Phase 9 — OpenTelemetry
+	OTelEndpoint string
+	OTelService  string
+
+	// Phase 10 — Hardening
+	APIKey               string
+	CORSOrigins          []string
+	GrafanaWebhookSecret string
+	RateLimitPerMinute   int
 }
 
 // Load reads configuration from environment variables.
@@ -72,6 +105,33 @@ func Load() (*Config, error) {
 		EmbeddingAPIKey:   firstNonEmpty(os.Getenv("EMBEDDING_API_KEY"), os.Getenv("LLM_API_KEY")),
 		EmbeddingBaseURL:  getEnv("EMBEDDING_BASE_URL", getEnv("LLM_BASE_URL", "https://api.openai.com/v1")),
 		EmbeddingTimeout:  getDurationEnv("EMBEDDING_TIMEOUT", 60*time.Second),
+
+		LokiProvider:        getEnv("LOKI_PROVIDER", "mock"),
+		LokiURL:             os.Getenv("LOKI_URL"),
+		LokiToken:           os.Getenv("LOKI_TOKEN"),
+		PrometheusProvider:  getEnv("PROMETHEUS_PROVIDER", "mock"),
+		PrometheusURL:       os.Getenv("PROMETHEUS_URL"),
+		PrometheusToken:     os.Getenv("PROMETHEUS_TOKEN"),
+		GrafanaProvider:     getEnv("GRAFANA_PROVIDER", "mock"),
+		GrafanaURL:          os.Getenv("GRAFANA_URL"),
+		GrafanaToken:        os.Getenv("GRAFANA_TOKEN"),
+		GitHubProvider:      getEnv("GITHUB_PROVIDER", "mock"),
+		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+		GitHubRepository:    os.Getenv("GITHUB_REPOSITORY"),
+		GitHubBaseURL:       getEnv("GITHUB_BASE_URL", "https://api.github.com"),
+		GitHubWriteEnabled:  getBoolEnv("GITHUB_WRITE_ENABLED", false),
+		SlackProvider:       getEnv("SLACK_PROVIDER", "mock"),
+		SlackBotToken:       os.Getenv("SLACK_BOT_TOKEN"),
+		SlackDefaultChannel: getEnv("SLACK_DEFAULT_CHANNEL", "#incidents"),
+		IntegrationTimeout:  getDurationEnv("INTEGRATION_TIMEOUT", 15*time.Second),
+
+		PublicURL:            getEnv("PUBLIC_URL", "http://localhost:8080"),
+		OTelEndpoint:         os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		OTelService:          getEnv("OTEL_SERVICE_NAME", "opspilot"),
+		APIKey:               os.Getenv("API_KEY"),
+		CORSOrigins:          splitCSV(getEnv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")),
+		GrafanaWebhookSecret: os.Getenv("GRAFANA_WEBHOOK_SECRET"),
+		RateLimitPerMinute:   getIntEnv("RATE_LIMIT_PER_MINUTE", 120),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -149,4 +209,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

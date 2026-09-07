@@ -4,7 +4,7 @@
 
 OpsPilot receives production alerts, investigates incidents using AI agents and observability tools, determines probable root causes, and coordinates human-approved remediation — with a full audit trail.
 
-> **Status:** Phase 5 (RAG) complete. Document ingestion, pgvector retrieval, and RAG-backed knowledge tools are operational. See [`docs/architecture/rag.md`](docs/architecture/rag.md).
+> **Status:** Phases 7–10 complete. Human approval, React dashboard, OpenTelemetry hooks, and hardening (API key / rate limits / webhook HMAC / CI) are in place.
 
 ## Project Overview
 
@@ -143,7 +143,7 @@ Incident job claimed
 }
 ```
 
-## Phase 5 — RAG (Current)
+## Phase 5 — RAG
 
 ### Implemented
 
@@ -174,44 +174,89 @@ Investigation job
 
 Design details for later work: [`docs/architecture/rag.md`](docs/architecture/rag.md).
 
+## Phase 6 — Integrations
+
+### Implemented
+
+| Component | Description |
+|-----------|-------------|
+| Adapter layer | `internal/integrations/{loki,prometheus,grafana,github,slack}` |
+| Provider switches | `*_PROVIDER=mock` (default) or real HTTP clients |
+| Tool wrappers | Same tool names/schemas; results include `provider` |
+| Grafana webhook | `POST /api/v1/webhooks/grafana` → incident intake |
+| Status API | `GET /api/v1/integrations` |
+| GitHub writes | Gated by approval + `GITHUB_WRITE_ENABLED` |
+
+### Integration → Tool map
+
+| System | Tools | Default |
+|--------|-------|---------|
+| Loki | `search_logs` | mock |
+| Prometheus | `query_metrics` | mock |
+| Grafana | `get_service_health` + alert webhook | mock |
+| GitHub | commits, inspect, issue, PR | mock |
+| Slack | `send_slack_notification` | mock |
+
+Design details: [`docs/architecture/integrations.md`](docs/architecture/integrations.md).
+
+## Phase 7 — Human Approval
+
+### Implemented
+
+| Component | Description |
+|-----------|-------------|
+| Remediation proposals | Auto-created from RCA recommended actions |
+| Approvals audit | `approvals` table with actor/comment |
+| APIs | list/propose/approve/reject + awaiting queue |
+| Execution | Approved tools run (`create_github_issue`, Slack) |
+| Lifecycle | → `WAITING_FOR_APPROVAL` → approve → `RESOLVED` |
+
+See [`docs/architecture/approvals.md`](docs/architecture/approvals.md).
+
+## Phase 8 — Dashboard
+
+React + Vite app in [`web/`](web/):
+
+- Incident list / detail (timeline, evidence, RCA)
+- Approval queue + approve/reject
+- Knowledge (RAG) search + integrations status
+- Compose service `opspilot-web` on `:8088`
+
+```bash
+cd web && npm install && npm run dev   # http://localhost:5173
+# or
+docker compose up opspilot-web
+```
+
+## Phase 9 — Observability
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` enables OTLP HTTP tracing (no-op when unset)
+- Sample collector config: `deploy/otel/collector.yaml`
+- Dashboard stub: `deploy/grafana/opspilot-overview.json`
+- Docs: [`docs/architecture/observability.md`](docs/architecture/observability.md)
+
+## Phase 10 — Hardening
+
+- Optional `API_KEY` (`X-API-Key` / Bearer)
+- Rate limits on create + Grafana webhook
+- Optional `GRAFANA_WEBHOOK_SECRET` HMAC
+- CORS via `CORS_ORIGINS`
+- CI: `.github/workflows/ci.yml`
+- Docs: [`docs/architecture/hardening.md`](docs/architecture/hardening.md)
+
 ### Directory Structure
 
 ```
 production-incident-investigator/
-├── cmd/
-│   ├── server/              # API entrypoint
-│   ├── worker/              # Investigation worker
-│   └── ingest/              # Knowledge base seeder CLI
-├── data/knowledge/          # Seed runbooks / playbooks / postmortems
-├── docs/architecture/       # Long-lived design notes (RAG, …)
-├── internal/
-│   ├── config/              # Environment configuration
-│   ├── domain/
-│   │   ├── incident/        # Incident models, state machine
-│   │   ├── investigation/   # Investigation and job models
-│   │   ├── tool/            # Tool execution domain
-│   │   └── rag/             # Document / chunk / hit models
-│   ├── application/
-│   │   ├── incident/
-│   │   ├── investigation/
-│   │   ├── tool/
-│   │   └── rag/             # Ingest + search orchestration
-│   ├── agent/
-│   │   ├── agents/          # Investigation agent
-│   │   ├── llm/             # LLM provider interface + openai/mock
-│   │   ├── memory/          # Short-term investigation memory
-│   │   ├── rag/             # Chunking, embedders, RAG tools
-│   │   ├── tools/           # Tool interface, registry, executor
-│   │   │   └── mocks/       # Mock tool implementations
-│   │   └── wiring/          # Dependency wiring
-│   ├── infrastructure/
-│   │   ├── postgres/        # PostgreSQL repositories (incl. RAG)
-│   │   └── redis/           # Redis client and job queue
-│   ├── transport/http/      # HTTP server, router, middleware
-│   └── pkg/logger/          # Structured logging
-├── migrations/              # SQL migrations (000001–000005)
-├── docker-compose.yml       # postgres(pgvector), redis, api, worker
-├── Dockerfile
+├── cmd/{server,worker,ingest}
+├── web/                     # Phase 8 React dashboard
+├── data/knowledge/
+├── docs/architecture/       # RAG, integrations, approvals, otel, hardening
+├── deploy/{otel,grafana}
+├── internal/...
+├── migrations/              # through 000006
+├── .github/workflows/ci.yml
+├── docker-compose.yml
 └── .env.example
 ```
 
@@ -364,6 +409,40 @@ curl -X POST http://localhost:8080/api/v1/rag/search \
   -d '{"query":"database connection pool","top_k":5,"source_types":["runbook"]}'
 ```
 
+### Integrations status
+
+```bash
+curl http://localhost:8080/api/v1/integrations
+```
+
+### Grafana alert webhook
+
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks/grafana \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "HighLatency",
+    "status": "firing",
+    "commonLabels": {
+      "alertname": "HighLatency",
+      "service": "payment-service",
+      "environment": "production",
+      "severity": "critical"
+    },
+    "alerts": [{"annotations": {"summary": "P95 latency above 3s"}}]
+  }'
+```
+
+### Remediations (Phase 7)
+
+```bash
+curl http://localhost:8080/api/v1/remediations/awaiting
+curl http://localhost:8080/api/v1/incidents/{id}/remediations
+curl -X POST http://localhost:8080/api/v1/incidents/{id}/remediations/{proposalId}/approve \
+  -H "Content-Type: application/json" \
+  -d '{"actor":"oncall","comment":"ship it"}'
+```
+
 ### Health
 
 ```bash
@@ -451,6 +530,27 @@ See [`.env.example`](.env.example) for all variables.
 | EMBEDDING_API_KEY | For openai | Falls back to `LLM_API_KEY` |
 | EMBEDDING_BASE_URL | No | Defaults to `LLM_BASE_URL` |
 | EMBEDDING_TIMEOUT | No | Default: 60s |
+| LOKI_PROVIDER | No | `mock` (default) or `loki` |
+| LOKI_URL | For loki | Loki base URL |
+| PROMETHEUS_PROVIDER | No | `mock` (default) or `prometheus` |
+| PROMETHEUS_URL | For prometheus | Prometheus base URL |
+| GRAFANA_PROVIDER | No | `mock` (default) or `grafana` |
+| GRAFANA_URL | For grafana | Grafana base URL |
+| GITHUB_PROVIDER | No | `mock` (default) or `github` |
+| GITHUB_TOKEN | For github | PAT / token |
+| GITHUB_REPOSITORY | For github | `owner/repo` |
+| GITHUB_WRITE_ENABLED | No | Default: false (issues/PRs) |
+| SLACK_PROVIDER | No | `mock` (default) or `slack` |
+| SLACK_BOT_TOKEN | For slack | Bot token |
+| SLACK_DEFAULT_CHANNEL | No | Default: `#incidents` |
+| INTEGRATION_TIMEOUT | No | Default: 15s |
+| PUBLIC_URL | No | Links in Slack notifies (default localhost:8080) |
+| OTEL_EXPORTER_OTLP_ENDPOINT | No | Empty disables tracing |
+| OTEL_SERVICE_NAME | No | Default: opspilot |
+| API_KEY | No | When set, required on API (except health/metrics) |
+| CORS_ORIGINS | No | CSV of allowed origins |
+| GRAFANA_WEBHOOK_SECRET | No | HMAC secret for Grafana webhooks |
+| RATE_LIMIT_PER_MINUTE | No | Default: 120 |
 
 ## Testing
 
@@ -472,11 +572,11 @@ go test -tags=integration ./tests/integration/... -v
 | 3 — Tool Framework | ✅ Complete | Tool registry, permissions, mocks, evidence API |
 | 4 — AI Agent | ✅ Complete | LLM abstraction, investigation agent, structured RCA |
 | 5 — RAG | ✅ Complete | Document ingestion, pgvector, RAG knowledge tools |
-| 6 — Integrations | Planned | GitHub, Slack, Grafana, Prometheus, Loki |
-| 7 — Human Approval | Planned | Approval workflow, action execution |
-| 8 — Dashboard | Planned | React frontend |
-| 9 — Observability | Planned | OpenTelemetry, Grafana dashboards |
-| 10 — Hardening | Planned | Auth, rate limiting, integration tests |
+| 6 — Integrations | ✅ Complete | GitHub, Slack, Grafana, Prometheus, Loki adapters |
+| 7 — Human Approval | ✅ Complete | Remediation proposals, approve/reject, execution |
+| 8 — Dashboard | ✅ Complete | React operator UI (`web/`) |
+| 9 — Observability | ✅ Complete | OTel OTLP hooks + sample dashboards |
+| 10 — Hardening | ✅ Complete | API key, rate limits, webhook HMAC, CI |
 
 ## License
 
