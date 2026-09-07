@@ -12,6 +12,7 @@ import (
 
 	appincident "github.com/Revati-Firke/production-incident-investigator/internal/application/incident"
 	appinvestigation "github.com/Revati-Firke/production-incident-investigator/internal/application/investigation"
+	apprag "github.com/Revati-Firke/production-incident-investigator/internal/application/rag"
 	apptool "github.com/Revati-Firke/production-incident-investigator/internal/application/tool"
 )
 
@@ -44,6 +45,7 @@ type RouterDeps struct {
 	Incidents    *appincident.Service
 	Orchestrator *appinvestigation.Orchestrator
 	Tools        *apptool.Service
+	RAG          *apprag.Service
 	Health       HealthDeps
 }
 
@@ -60,12 +62,21 @@ func NewRouter(deps RouterDeps) http.Handler {
 	healthHandler := NewHealthHandler(healthChecker{deps: deps.Health})
 	incidentHandler := NewIncidentHandler(deps.Orchestrator, deps.Incidents)
 	toolHandler := NewToolHandler(deps.Tools)
+	ragHandler := NewRAGHandler(deps.RAG)
 
 	r.Get("/api/v1/health", healthHandler.Readiness)
 	r.Get("/api/v1/health/live", healthHandler.Liveness)
 	r.Get("/api/v1/metrics", promhttp.Handler().ServeHTTP)
 
 	r.Get("/api/v1/tools", toolHandler.List)
+
+	r.Route("/api/v1/documents", func(r chi.Router) {
+		r.Post("/", ragHandler.Ingest)
+		r.Get("/", ragHandler.List)
+		r.Get("/{id}", ragHandler.Get)
+		r.Delete("/{id}", ragHandler.Delete)
+	})
+	r.Post("/api/v1/rag/search", ragHandler.Search)
 
 	r.Route("/api/v1/incidents", func(r chi.Router) {
 		r.Post("/", incidentHandler.Create)

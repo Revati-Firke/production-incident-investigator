@@ -306,6 +306,56 @@ func TestCreateIncidentValidation(t *testing.T) {
 	}
 }
 
+func TestRAGDocumentsAndSearch(t *testing.T) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	listResp, err := getJSON(client, baseURL()+"/documents?limit=20")
+	if err != nil {
+		t.Fatalf("list documents: %v", err)
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	if err := json.Unmarshal(listResp.Data, &page); err != nil {
+		t.Fatalf("unmarshal documents: %v", err)
+	}
+	if page.Total < 1 {
+		t.Fatalf("expected seeded documents, total=%d", page.Total)
+	}
+
+	searchPayload, _ := json.Marshal(map[string]any{
+		"query":        "database connection pool exhaustion payment",
+		"top_k":        3,
+		"source_types": []string{"runbook", "playbook"},
+	})
+	resp, err := client.Post(baseURL()+"/rag/search", "application/json", bytes.NewReader(searchPayload))
+	if err != nil {
+		t.Fatalf("rag search: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("search status %d: %s", resp.StatusCode, body)
+	}
+	var envelope apiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	if !envelope.Success {
+		t.Fatalf("search success=false: %+v", envelope.Error)
+	}
+	var result struct {
+		Hits []map[string]any `json:"hits"`
+	}
+	if err := json.Unmarshal(envelope.Data, &result); err != nil {
+		t.Fatalf("unmarshal hits: %v", err)
+	}
+	if len(result.Hits) == 0 {
+		t.Fatal("expected RAG hits for connection pool query")
+	}
+}
+
 func getJSON(client *http.Client, url string) (*apiResponse, error) {
 	resp, err := client.Get(url)
 	if err != nil {

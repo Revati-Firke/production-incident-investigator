@@ -33,4 +33,13 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.HTTPReadTimeout != 15*time.Second {
 		t.Errorf("HTTPReadTimeout = %v", cfg.HTTPReadTimeout)
 	}
+	if !cfg.RAGEnabled {
+		t.Error("RAGEnabled default want true")
+	}
+	if cfg.EmbeddingProvider != "mock" {
+		t.Errorf("EmbeddingProvider = %s", cfg.EmbeddingProvider)
+	}
+	if cfg.RAGTopK != 5 {
+		t.Errorf("RAGTopK = %d", cfg.RAGTopK)
+	}
 }

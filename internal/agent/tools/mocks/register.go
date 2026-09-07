@@ -8,8 +8,8 @@ import (
 	"github.com/Revati-Firke/production-incident-investigator/internal/agent/tools"
 )
 
-// RegisterAll registers all mock tools into the registry.
-func RegisterAll(r *tools.Registry) error {
+// RegisterCore registers mock tools except knowledge (RAG-backed in Phase 5).
+func RegisterCore(r *tools.Registry) error {
 	all := []tools.Tool{
 		&searchLogsTool{},
 		&queryMetricsTool{},
@@ -21,8 +21,6 @@ func RegisterAll(r *tools.Registry) error {
 		&inspectCodeTool{},
 		&createIssueTool{},
 		&createPRTool{},
-		&searchRunbooksTool{},
-		&searchIncidentsTool{},
 		&slackNotifyTool{},
 	}
 	for _, t := range all {
@@ -31,6 +29,24 @@ func RegisterAll(r *tools.Registry) error {
 		}
 	}
 	return nil
+}
+
+// RegisterKnowledgeMocks registers hardcoded knowledge tools (unit tests / RAG disabled).
+func RegisterKnowledgeMocks(r *tools.Registry) error {
+	for _, t := range []tools.Tool{&searchRunbooksTool{}, &searchIncidentsTool{}} {
+		if err := r.Register(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RegisterAll registers all mock tools into the registry.
+func RegisterAll(r *tools.Registry) error {
+	if err := RegisterCore(r); err != nil {
+		return err
+	}
+	return RegisterKnowledgeMocks(r)
 }
 
 // NewRegistry creates a registry with all mock tools registered.

@@ -56,10 +56,14 @@ func main() {
 	investigationRepo := postgres.NewInvestigationRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
-	toolBundle, err := wiring.NewToolBundle(dbPool, incidentRepo)
+	toolBundle, err := wiring.NewToolBundle(*cfg, dbPool, incidentRepo)
 	if err != nil {
 		log.Error("failed to bootstrap tools", "error", err)
 		os.Exit(1)
+	}
+
+	if err := wiring.SeedKnowledgeBase(ctx, *cfg, toolBundle.RAG, log); err != nil {
+		log.Warn("rag seed skipped or failed", "error", err)
 	}
 
 	agent, err := wiring.NewInvestigationAgent(*cfg, toolBundle)

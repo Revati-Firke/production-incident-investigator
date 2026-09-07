@@ -58,9 +58,14 @@ func main() {
 	intakeRepo := postgres.NewIntakeRepository(dbPool)
 	jobQueue := redis.NewJobQueue(redisClient)
 
-	toolBundle, err := wiring.NewToolBundle(dbPool, incidentRepo)
+	toolBundle, err := wiring.NewToolBundle(*cfg, dbPool, incidentRepo)
 	if err != nil {
 		log.Error("failed to bootstrap tools", "error", err)
+		os.Exit(1)
+	}
+
+	if err := wiring.SeedKnowledgeBase(ctx, *cfg, toolBundle.RAG, log); err != nil {
+		log.Error("failed to seed rag knowledge base", "error", err)
 		os.Exit(1)
 	}
 
@@ -73,6 +78,7 @@ func main() {
 		Incidents:    incidentSvc,
 		Orchestrator: orchestrator,
 		Tools:        toolBundle.Service,
+		RAG:          toolBundle.RAG,
 		Health: transporthttp.HealthDeps{
 			Postgres: dbPool,
 			Redis:    redisClient,

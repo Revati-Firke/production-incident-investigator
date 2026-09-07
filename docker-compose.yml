@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector required for Phase 5 RAG (cosine similarity search)
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: opspilot
       POSTGRES_PASSWORD: opspilot
@@ -51,6 +52,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       LLM_PROVIDER: mock
       LLM_MODEL: mock-rca-v1
+      RAG_ENABLED: "true"
+      RAG_SEED_ON_START: "true"
+      RAG_SEED_DIR: /app/data/knowledge
+      EMBEDDING_PROVIDER: mock
+      EMBEDDING_MODEL: mock-embed-v1
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -61,7 +67,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
 
   opspilot-worker:
     build:
@@ -75,6 +81,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       LLM_PROVIDER: mock
       LLM_MODEL: mock-rca-v1
+      RAG_ENABLED: "true"
+      RAG_SEED_ON_START: "false"
+      RAG_SEED_DIR: /app/data/knowledge
+      EMBEDDING_PROVIDER: mock
+      EMBEDDING_MODEL: mock-embed-v1
     depends_on:
       migrate:
         condition: service_completed_successfully

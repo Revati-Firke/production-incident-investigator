@@ -4,7 +4,7 @@
 
 OpsPilot receives production alerts, investigates incidents using AI agents and observability tools, determines probable root causes, and coordinates human-approved remediation — with a full audit trail.
 
-> **Status:** Phase 4 (AI Agent) complete. LLM abstraction, investigation agent, structured RCA, and agent-run audit trail are operational.
+> **Status:** Phase 5 (RAG) complete. Document ingestion, pgvector retrieval, and RAG-backed knowledge tools are operational. See [`docs/architecture/rag.md`](docs/architecture/rag.md).
 
 ## Project Overview
 
@@ -94,11 +94,11 @@ flowchart LR
 | `inspect_code` | READ_ONLY | GitHub |
 | `create_github_issue` | REQUIRES_APPROVAL | GitHub |
 | `create_pull_request` | REQUIRES_APPROVAL | GitHub |
-| `search_runbooks` | READ_ONLY | Knowledge |
-| `search_previous_incidents` | READ_ONLY | Knowledge |
+| `search_runbooks` | READ_ONLY | Knowledge (RAG-backed in Phase 5) |
+| `search_previous_incidents` | READ_ONLY | Knowledge (RAG-backed in Phase 5) |
 | `send_slack_notification` | AUTONOMOUS | Communication |
 
-## Phase 4 — AI Agent (Current)
+## Phase 4 — AI Agent
 
 ### Implemented
 
@@ -143,37 +143,74 @@ Incident job claimed
 }
 ```
 
+## Phase 5 — RAG (Current)
+
+### Implemented
+
+| Component | Description |
+|-----------|-------------|
+| pgvector schema | `documents` + `document_chunks` (384-d) + HNSW index |
+| Chunking | Overlapping text splitter (`RAG_CHUNK_SIZE` / overlap) |
+| Mock embedder | Deterministic local embeddings (default) |
+| OpenAI embedder | Compatible `/embeddings` with `dimensions=384` |
+| Ingest service | Chunk → embed → store; directory seeder |
+| Knowledge tools | RAG-backed `search_runbooks` / `search_previous_incidents` |
+| Document API | CRUD-ish ingest/list/get/delete |
+| Search API | `POST /api/v1/rag/search` for operators/debug |
+| Seed corpus | `data/knowledge/*.md` auto-loaded on API start |
+| CLI | `cmd/ingest` for manual/batch seeding |
+
+### RAG Flow
+
+```text
+Seed / POST /documents
+  → chunk + embed
+  → PostgreSQL (pgvector)
+Investigation job
+  → search_runbooks (semantic)
+  → (agent may call search_previous_incidents)
+  → evidence included in RCA prompt
+```
+
+Design details for later work: [`docs/architecture/rag.md`](docs/architecture/rag.md).
+
 ### Directory Structure
 
 ```
 production-incident-investigator/
 ├── cmd/
 │   ├── server/              # API entrypoint
-│   └── worker/              # Investigation worker
+│   ├── worker/              # Investigation worker
+│   └── ingest/              # Knowledge base seeder CLI
+├── data/knowledge/          # Seed runbooks / playbooks / postmortems
+├── docs/architecture/       # Long-lived design notes (RAG, …)
 ├── internal/
 │   ├── config/              # Environment configuration
 │   ├── domain/
 │   │   ├── incident/        # Incident models, state machine
 │   │   ├── investigation/   # Investigation and job models
-│   │   └── tool/            # Tool execution domain
+│   │   ├── tool/            # Tool execution domain
+│   │   └── rag/             # Document / chunk / hit models
 │   ├── application/
-│   │   ├── incident/        # Incident business logic
-│   │   ├── investigation/   # Orchestrator, processor, intake
-│   │   └── tool/            # Tool listing and execution
+│   │   ├── incident/
+│   │   ├── investigation/
+│   │   ├── tool/
+│   │   └── rag/             # Ingest + search orchestration
 │   ├── agent/
 │   │   ├── agents/          # Investigation agent
 │   │   ├── llm/             # LLM provider interface + openai/mock
 │   │   ├── memory/          # Short-term investigation memory
+│   │   ├── rag/             # Chunking, embedders, RAG tools
 │   │   ├── tools/           # Tool interface, registry, executor
 │   │   │   └── mocks/       # Mock tool implementations
 │   │   └── wiring/          # Dependency wiring
 │   ├── infrastructure/
-│   │   ├── postgres/        # PostgreSQL repositories
+│   │   ├── postgres/        # PostgreSQL repositories (incl. RAG)
 │   │   └── redis/           # Redis client and job queue
 │   ├── transport/http/      # HTTP server, router, middleware
 │   └── pkg/logger/          # Structured logging
-├── migrations/              # SQL migrations
-├── docker-compose.yml
+├── migrations/              # SQL migrations (000001–000005)
+├── docker-compose.yml       # postgres(pgvector), redis, api, worker
 ├── Dockerfile
 └── .env.example
 ```
@@ -183,6 +220,7 @@ production-incident-investigator/
 - **Go 1.23** with modules
 - **Chi** HTTP router
 - **pgx** PostgreSQL driver
+- **pgvector** vector similarity search
 - **go-redis** Redis client
 - **Prometheus** metrics endpoint
 - **golang-migrate** database migrations
@@ -304,6 +342,28 @@ curl http://localhost:8080/api/v1/incidents/{id}/investigation
 curl http://localhost:8080/api/v1/incidents/{id}/agent-runs
 ```
 
+### List / Ingest Knowledge Documents (RAG)
+
+```bash
+curl http://localhost:8080/api/v1/documents
+
+curl -X POST http://localhost:8080/api/v1/documents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_type": "runbook",
+    "title": "Custom Runbook",
+    "content": "Steps to mitigate connection pool exhaustion..."
+  }'
+```
+
+### Semantic Search (RAG)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"database connection pool","top_k":5,"source_types":["runbook"]}'
+```
+
 ### Health
 
 ```bash
@@ -332,15 +392,24 @@ curl http://localhost:8080/api/v1/health/live
 
 ```bash
 cp .env.example .env
+# Phase 5 needs pgvector. If upgrading from older postgres image:
+# docker compose down -v
 docker compose up --build
 ```
 
-API available at `http://localhost:8080`.
+API available at `http://localhost:8080`. Seed runbooks load automatically when the knowledge base is empty.
+
+### Seed / re-ingest knowledge
+
+```bash
+go run ./cmd/ingest -dir data/knowledge
+go run ./cmd/ingest -dir data/knowledge -force   # re-ingest even if docs exist
+```
 
 ### Local Development (without Docker for API)
 
 ```bash
-# Start dependencies
+# Start dependencies (pgvector image)
 docker compose up postgres redis migrate -d
 
 # Run API
@@ -360,7 +429,7 @@ See [`.env.example`](.env.example) for all variables.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| DATABASE_URL | Yes | PostgreSQL connection string |
+| DATABASE_URL | Yes | PostgreSQL connection string (pgvector required for RAG) |
 | REDIS_URL | Yes | Redis connection string |
 | HTTP_PORT | No | Default: 8080 |
 | APP_ENV | No | Default: development |
@@ -370,6 +439,18 @@ See [`.env.example`](.env.example) for all variables.
 | LLM_API_KEY | For openai | API key for OpenAI-compatible providers |
 | LLM_BASE_URL | No | Default: `https://api.openai.com/v1` |
 | LLM_TIMEOUT | No | Default: 60s |
+| RAG_ENABLED | No | Default: true |
+| RAG_TOP_K | No | Default: 5 |
+| RAG_MIN_SCORE | No | Default: 0 (no filter) |
+| RAG_CHUNK_SIZE | No | Default: 800 chars |
+| RAG_CHUNK_OVERLAP | No | Default: 120 chars |
+| RAG_SEED_ON_START | No | Default: true (API seeds empty KB) |
+| RAG_SEED_DIR | No | Default: `data/knowledge` |
+| EMBEDDING_PROVIDER | No | `mock` (default) or `openai` |
+| EMBEDDING_MODEL | No | Default mock id / `text-embedding-3-small` |
+| EMBEDDING_API_KEY | For openai | Falls back to `LLM_API_KEY` |
+| EMBEDDING_BASE_URL | No | Defaults to `LLM_BASE_URL` |
+| EMBEDDING_TIMEOUT | No | Default: 60s |
 
 ## Testing
 
@@ -390,7 +471,7 @@ go test -tags=integration ./tests/integration/... -v
 | 2 — Incident Engine | ✅ Complete | Worker, job queue, investigation model |
 | 3 — Tool Framework | ✅ Complete | Tool registry, permissions, mocks, evidence API |
 | 4 — AI Agent | ✅ Complete | LLM abstraction, investigation agent, structured RCA |
-| 5 — RAG | Planned | Document ingestion, pgvector |
+| 5 — RAG | ✅ Complete | Document ingestion, pgvector, RAG knowledge tools |
 | 6 — Integrations | Planned | GitHub, Slack, Grafana, Prometheus, Loki |
 | 7 — Human Approval | Planned | Approval workflow, action execution |
 | 8 — Dashboard | Planned | React frontend |
