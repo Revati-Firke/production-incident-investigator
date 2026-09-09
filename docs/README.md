@@ -4,6 +4,8 @@ Long-lived design notes that complement the root [README](../README.md).
 
 | Doc | Contents |
 |-----|----------|
+| [GUIDE.md](GUIDE.md) | **Start here** — mental model, code layout, end-to-end flow |
+| [TESTING.md](TESTING.md) | Step-by-step manual + API test checklist |
 | [architecture/rag.md](architecture/rag.md) | Phase 5 RAG |
 | [architecture/integrations.md](architecture/integrations.md) | Phase 6 adapters |
 | [architecture/approvals.md](architecture/approvals.md) | Phase 7 remediation / approval |

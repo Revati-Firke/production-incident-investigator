@@ -8,6 +8,8 @@ OpsPilot receives production alerts, investigates incidents using AI agents and 
 
 ## Project Overview
 
+New to the codebase? Read **[docs/GUIDE.md](docs/GUIDE.md)** for a mental model, folder map, and an end-to-end walkthrough.
+
 OpsPilot is designed for SRE and platform engineering teams who need:
 
 - Autonomous incident triage and investigation
